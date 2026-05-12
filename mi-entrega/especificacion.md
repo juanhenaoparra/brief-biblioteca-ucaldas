@@ -1,4 +1,4 @@
-# Especificación Formal — Sistema de Préstamo de Libros
+# Especificación — Sistema de Préstamo de Libros
 
 > **Autor:** Juan Sebastián Henao Parra
 > **Fecha:** 2026-05-12
@@ -9,98 +9,100 @@
 
 ## 1. Propósito del sistema
 
-API REST que gestiona el ciclo de préstamo de libros físicos de la Biblioteca de la Universidad de Caldas. Permite consultar catálogo, registrar préstamos y devoluciones, controlar renovaciones, calcular multas automáticas y reportar préstamos vencidos. Reemplaza la hoja de cálculo actual y expone los datos para consumo desde la app móvil y el portal de estudiantes. Persistencia en memoria en esta versión (no hay base de datos hasta el próximo semestre).
+Construir una API REST que le permita a la biblioteca de la U. de Caldas dejar de manejar los préstamos en una hoja de cálculo. La idea es que desde la API se pueda consultar el catálogo, prestar libros, devolverlos, renovar préstamos, calcular multas y saber quién tiene libros vencidos. Por ahora los datos viven en memoria; la base de datos queda para más adelante cuando salga el presupuesto. La API la van a consumir la app móvil y el portal de estudiantes, así que el frontend lo hace otra persona.
 
 ---
 
 ## 2. Alcance
 
-**Incluido en esta versión:**
+**Lo que sí entra en esta versión:**
 
-- Catálogo de libros con ejemplares múltiples por libro.
-- Gestión de estudiantes de pregrado y posgrado.
-- Creación, renovación y devolución de préstamos.
-- Cálculo automático de multas al devolver tarde.
-- Consulta de préstamos vigentes y de préstamos vencidos.
-- Consulta del historial de préstamos por estudiante.
-- Reglas de límites por tipo de estudiante y por tipo de libro (normal vs alta demanda).
-- Bloqueo de préstamos por morosidad (vencidos sin devolver o multas pendientes).
+- Catálogo de libros con varios ejemplares por título.
+- Estudiantes de pregrado y posgrado.
+- Crear, renovar y devolver préstamos.
+- Multas automáticas cuando alguien devuelve tarde.
+- Ver préstamos vigentes y préstamos vencidos.
+- Historial de préstamos por estudiante.
+- Bloquear préstamos a quien tenga vencidos o multas sin pagar.
+- Plazos distintos según el tipo de libro (normal vs. alta demanda).
 
-**Explícitamente fuera del alcance:**
+**Lo que no entra (al menos por ahora):**
 
-- Préstamos a profesores investigadores (hasta 10 libros, 30 días) — la cliente lo declara fuera del alcance.
-- Persistencia en base de datos (queda para el próximo semestre, con presupuesto).
-- Autenticación / autorización (sin login, sin roles).
-- Frontend (móvil y portal son consumidores externos, no se construyen aquí).
-- Pago de multas (solo se registran y se acumulan; el cobro físico es presencial).
-- Notificaciones push o por correo de vencimientos (solo se exponen vía endpoint).
-- Reserva de libros con lista de espera (la API la modela como bandera, no como cola).
+- Profesores investigadores. La misma cliente dijo que ese caso lo manejan aparte.
+- Base de datos. Todo en memoria hasta que haya presupuesto.
+- Login / autenticación. No la pidieron.
+- Frontend. Esto es solo la API.
+- Pagar multas desde la API. Por ahora solo se calculan y se acumulan; el pago lo manejan en mostrador.
+- Notificaciones por correo o push. Si quieren ver vencidos, consultan el endpoint.
+- Cola de espera FIFO con prioridades. Solo modelo si hay alguien esperando o no (bandera), no el orden.
 
 ---
 
 ## 3. Modelo de datos
 
-### Entidad: Libro
+### Libro
 
 | Campo          | Tipo    | Obligatorio | Descripción                                              |
 |----------------|---------|-------------|----------------------------------------------------------|
-| `id`           | string  | sí          | Identificador único del título (UUID generado por API).  |
-| `titulo`       | string  | sí          | Título del libro.                                        |
+| `id`           | string  | sí          | ID único del libro (UUID generado por la API).           |
+| `titulo`       | string  | sí          | Título.                                                  |
 | `autor`        | string  | sí          | Autor principal.                                         |
-| `sala`         | string  | sí          | Sala física donde se ubica.                              |
-| `alta_demanda` | boolean | sí          | `true` si pertenece a sala de reserva (plazo 3 días).    |
+| `sala`         | string  | sí          | Sala donde se ubica.                                     |
+| `alta_demanda` | boolean | sí          | `true` si es de sala de reserva (plazo de 3 días).       |
 
-### Entidad: Ejemplar
+### Ejemplar
 
-| Campo                | Tipo    | Obligatorio | Descripción                                                                |
-|----------------------|---------|-------------|----------------------------------------------------------------------------|
-| `codigo_inventario`  | string  | sí          | Código único de inventario por ejemplar físico (PK natural).               |
-| `libro_id`           | string  | sí          | FK al libro al que pertenece.                                              |
-| `estado`             | enum    | sí          | `"disponible"` \| `"prestado"`.                                            |
-| `solicitado_por_otro`| boolean | sí          | `true` si otro estudiante registró una solicitud sobre este ejemplar (bloquea renovación). |
+Cada libro puede tener varios ejemplares físicos, cada uno con su propio código de inventario.
 
-### Entidad: Estudiante
+| Campo                 | Tipo    | Obligatorio | Descripción                                                              |
+|-----------------------|---------|-------------|--------------------------------------------------------------------------|
+| `codigo_inventario`   | string  | sí          | Código del ejemplar físico (esta es la "llave" real).                    |
+| `libro_id`            | string  | sí          | A qué libro pertenece.                                                   |
+| `estado`              | enum    | sí          | `"disponible"` o `"prestado"`.                                           |
+| `solicitado_por_otro` | boolean | sí          | `true` si otro estudiante ya pidió este ejemplar (esto bloquea renovar). |
 
-| Campo               | Tipo    | Obligatorio | Descripción                                              |
-|---------------------|---------|-------------|----------------------------------------------------------|
-| `codigo`            | string  | sí          | Código único institucional (PK).                         |
-| `nombre`            | string  | sí          | Nombre completo.                                         |
-| `programa`          | string  | sí          | Programa académico.                                      |
-| `semestre`          | integer | sí          | Semestre actual (>= 1).                                  |
-| `tipo`              | enum    | sí          | `"pregrado"` \| `"posgrado"`.                            |
+### Estudiante
 
-### Entidad: Préstamo
+| Campo      | Tipo    | Obligatorio | Descripción                                  |
+|------------|---------|-------------|----------------------------------------------|
+| `codigo`   | string  | sí          | Código institucional del estudiante.         |
+| `nombre`   | string  | sí          | Nombre completo.                             |
+| `programa` | string  | sí          | Programa académico.                          |
+| `semestre` | integer | sí          | Semestre actual (≥ 1).                       |
+| `tipo`     | enum    | sí          | `"pregrado"` o `"posgrado"`.                 |
 
-| Campo                       | Tipo     | Obligatorio | Descripción                                                            |
-|-----------------------------|----------|-------------|------------------------------------------------------------------------|
-| `id`                        | string   | sí          | Identificador único del préstamo (UUID).                               |
-| `estudiante_codigo`         | string   | sí          | FK al estudiante.                                                      |
-| `ejemplar_codigo`           | string   | sí          | FK al ejemplar.                                                        |
-| `fecha_prestamo`            | ISO 8601 | sí          | Fecha y hora de creación, en UTC.                                      |
-| `fecha_devolucion_esperada` | ISO 8601 | sí          | Calculada según tipo de libro (15 o 3 días desde fecha_prestamo).      |
-| `fecha_devolucion_real`     | ISO 8601 | no          | Se asigna al devolver. Null mientras esté activo.                      |
-| `estado`                    | enum     | sí          | `"activo"` \| `"devuelto"` \| `"vencido"`.                             |
-| `renovaciones`              | integer  | sí          | Contador de renovaciones aplicadas (0 al crear).                       |
+### Préstamo
 
-### Entidad: Multa
+| Campo                       | Tipo     | Obligatorio | Descripción                                                                |
+|-----------------------------|----------|-------------|----------------------------------------------------------------------------|
+| `id`                        | string   | sí          | ID único del préstamo (UUID).                                              |
+| `estudiante_codigo`         | string   | sí          | Quién prestó el libro.                                                     |
+| `ejemplar_codigo`           | string   | sí          | Qué ejemplar se llevó.                                                     |
+| `fecha_prestamo`            | ISO 8601 | sí          | Cuándo se prestó (UTC).                                                    |
+| `fecha_devolucion_esperada` | ISO 8601 | sí          | Cuándo lo tiene que devolver (15 o 3 días después según el libro).         |
+| `fecha_devolucion_real`     | ISO 8601 | no          | Cuándo lo devolvió de verdad. Vacío mientras esté activo.                  |
+| `estado`                    | enum     | sí          | `"activo"` o `"devuelto"`.                                                 |
+| `renovaciones`              | integer  | sí          | Cuántas veces se renovó (arranca en 0).                                    |
+
+### Multa
 
 | Campo                | Tipo     | Obligatorio | Descripción                                          |
 |----------------------|----------|-------------|------------------------------------------------------|
-| `id`                 | string   | sí          | Identificador único (UUID).                          |
-| `estudiante_codigo`  | string   | sí          | FK al estudiante.                                    |
-| `prestamo_id`        | string   | sí          | FK al préstamo que la generó.                        |
-| `dias_retraso`       | integer  | sí          | Días calendario entre `fecha_devolucion_esperada` y `fecha_devolucion_real`. |
+| `id`                 | string   | sí          | ID único (UUID).                                     |
+| `estudiante_codigo`  | string   | sí          | A quién se le cobra.                                 |
+| `prestamo_id`        | string   | sí          | Por cuál préstamo se generó.                         |
+| `dias_retraso`       | integer  | sí          | Días de retraso (calendario).                        |
 | `monto_cop`          | integer  | sí          | `dias_retraso * 2000`.                               |
-| `pagada`             | boolean  | sí          | `false` al crear. Marca de pago.                     |
-| `fecha_generacion`   | ISO 8601 | sí          | Fecha y hora de generación, en UTC.                  |
+| `pagada`             | boolean  | sí          | `false` al crearla.                                  |
+| `fecha_generacion`   | ISO 8601 | sí          | Cuándo se generó (UTC).                              |
 
-### Diagrama de relaciones
+### Cómo se relacionan
 
 ```
 Libro 1 --- N Ejemplar
 Estudiante 1 --- N Préstamo
-Ejemplar 1 --- N Préstamo (a lo largo del tiempo; solo uno con estado=activo a la vez)
-Préstamo 0..1 --- 1 Multa (solo si devuelto tarde)
+Ejemplar 1 --- N Préstamo (a lo largo del tiempo; solo uno activo a la vez)
+Préstamo 0..1 --- 1 Multa (solo si devolvió tarde)
 Estudiante 1 --- N Multa
 ```
 
@@ -108,160 +110,160 @@ Estudiante 1 --- N Multa
 
 ## 4. Endpoints REST
 
-| Método | Ruta                                  | Propósito                                                | Body / Query                                        | Respuesta éxito                         | Códigos error posibles  |
-|--------|---------------------------------------|----------------------------------------------------------|-----------------------------------------------------|-----------------------------------------|-------------------------|
-| `GET`  | `/libros`                             | Listar catálogo. Filtros opcionales.                     | Query: `?disponibles=true&sala=X`                   | `200` lista de libros con conteo de ejemplares disponibles | `400`         |
-| `GET`  | `/libros/:id`                         | Detalle de un libro y sus ejemplares.                    | —                                                   | `200` con libro + ejemplares            | `404`                   |
-| `POST` | `/libros`                             | Crear libro (carga inicial del catálogo).                | `{titulo, autor, sala, alta_demanda}`               | `201` con libro creado                  | `400`                   |
-| `POST` | `/libros/:id/ejemplares`              | Agregar un ejemplar a un libro existente.                | `{codigo_inventario}`                               | `201` con ejemplar                      | `400`, `404`, `409`     |
-| `GET`  | `/estudiantes/:codigo`                | Detalle de un estudiante.                                | —                                                   | `200`                                   | `404`                   |
-| `POST` | `/estudiantes`                        | Crear estudiante (alta).                                 | `{codigo, nombre, programa, semestre, tipo}`        | `201`                                   | `400`, `409`            |
-| `GET`  | `/estudiantes/:codigo/historial`      | Historial completo de préstamos del estudiante.          | —                                                   | `200` lista de préstamos                | `404`                   |
-| `POST` | `/prestamos`                          | Crear préstamo.                                          | `{estudiante_codigo, ejemplar_codigo}`              | `201` con préstamo                      | `400`, `404`, `409`     |
-| `POST` | `/prestamos/:id/devolucion`           | Registrar devolución; calcula multa si aplica.           | —                                                   | `200` préstamo + multa (si aplica)      | `404`, `409`            |
-| `POST` | `/prestamos/:id/renovacion`           | Renovar préstamo si no hay otro solicitante.             | —                                                   | `200` con nueva `fecha_devolucion_esperada` | `404`, `409`        |
-| `POST` | `/prestamos/:id/solicitud-espera`     | Marcar que otro estudiante espera el ejemplar (bloquea renovación). | `{estudiante_codigo}`                  | `200` ejemplar marcado                  | `404`, `409`            |
-| `GET`  | `/prestamos`                          | Listar préstamos vigentes (estado=activo).               | Query: `?estudiante=...&vencidos=true`              | `200` lista                             | `400`                   |
-| `GET`  | `/prestamos/vencidos`                 | Listar préstamos con `fecha_devolucion_esperada < hoy` y `estado=activo`. | —                                | `200` lista                             | —                       |
-| `GET`  | `/multas`                             | Listar multas. Filtros por estudiante o estado pagada.   | Query: `?estudiante=...&pagada=false`               | `200` lista                             | `400`                   |
+| Método | Ruta                                  | Para qué                                                 | Body / Query                                        | Respuesta éxito                         | Errores posibles  |
+|--------|---------------------------------------|----------------------------------------------------------|-----------------------------------------------------|-----------------------------------------|-------------------|
+| `GET`  | `/libros`                             | Ver el catálogo. Se pueden filtrar.                      | Query: `?disponibles=true&sala=X`                   | `200` lista con conteo de ejemplares disponibles | `400`    |
+| `GET`  | `/libros/:id`                         | Ver un libro y sus ejemplares.                           | —                                                   | `200`                                   | `404`             |
+| `POST` | `/libros`                             | Cargar un libro al catálogo.                             | `{titulo, autor, sala, alta_demanda}`               | `201`                                   | `400`             |
+| `POST` | `/libros/:id/ejemplares`              | Agregar un ejemplar a un libro existente.                | `{codigo_inventario}`                               | `201`                                   | `400`, `404`, `409` |
+| `GET`  | `/estudiantes/:codigo`                | Ver un estudiante.                                       | —                                                   | `200`                                   | `404`             |
+| `POST` | `/estudiantes`                        | Registrar un estudiante.                                 | `{codigo, nombre, programa, semestre, tipo}`        | `201`                                   | `400`, `409`      |
+| `GET`  | `/estudiantes/:codigo/historial`      | Ver todo lo que ha prestado un estudiante.               | —                                                   | `200` lista                             | `404`             |
+| `POST` | `/prestamos`                          | Prestar un libro.                                        | `{estudiante_codigo, ejemplar_codigo}`              | `201`                                   | `400`, `404`, `409` |
+| `POST` | `/prestamos/:id/devolucion`           | Devolver. Aquí se calcula multa si corresponde.          | —                                                   | `200` con préstamo y multa (si aplica)  | `404`, `409`      |
+| `POST` | `/prestamos/:id/renovacion`           | Renovar el préstamo si nadie más lo espera.              | —                                                   | `200` con nueva fecha de devolución     | `404`, `409`      |
+| `POST` | `/prestamos/:id/solicitud-espera`     | Marcar que otro estudiante está esperando ese ejemplar.  | `{estudiante_codigo}`                               | `200`                                   | `404`, `409`      |
+| `GET`  | `/prestamos`                          | Ver préstamos activos.                                   | Query: `?estudiante=...&vencidos=true`              | `200` lista                             | `400`             |
+| `GET`  | `/prestamos/vencidos`                 | Solo los que ya están vencidos.                          | —                                                   | `200` lista                             | —                 |
+| `GET`  | `/multas`                             | Ver multas. Se pueden filtrar.                           | Query: `?estudiante=...&pagada=false`               | `200` lista                             | `400`             |
 
 ---
 
 ## 5. Reglas de negocio
 
-### RN1 — Límite de préstamos activos por tipo de estudiante
+### RN1 — Cupo de préstamos según tipo de estudiante
 
-- **Trigger:** al recibir `POST /prestamos`.
-- **Condición:**
-  - Pregrado: máximo 3 préstamos con `estado = "activo"`.
-  - Posgrado: máximo 5 préstamos con `estado = "activo"`.
-- **Acción si cumple:** continuar con validaciones siguientes.
-- **Acción si no cumple:** `409 Conflict` con `{error: "limite_prestamos_alcanzado", limite: N, actuales: M}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos`.
+- **Qué se valida:**
+  - Pregrado: máximo 3 préstamos activos.
+  - Posgrado: máximo 5 préstamos activos.
+- **Si pasa:** sigue al resto de validaciones.
+- **Si no pasa:** `409 Conflict` con `{error: "limite_prestamos_alcanzado", limite: N, actuales: M}`.
 
-### RN2 — Plazo de devolución según tipo de libro
+### RN2 — Plazo según el tipo de libro
 
-- **Trigger:** al crear un préstamo o al renovarlo.
-- **Condición:**
-  - Libro normal (`alta_demanda = false`): `fecha_devolucion_esperada = fecha_prestamo + 15 días`.
-  - Libro alta demanda (`alta_demanda = true`): `fecha_devolucion_esperada = fecha_prestamo + 3 días`.
-- **Acción si cumple:** asignar `fecha_devolucion_esperada` calculada.
-- **Acción si no cumple:** N/A (la regla siempre aplica; sin error posible).
+- **Cuándo se evalúa:** al crear o renovar un préstamo.
+- **Qué se valida:**
+  - Libro normal: 15 días desde hoy.
+  - Libro de alta demanda: 3 días desde hoy.
+- **Si pasa:** se guarda `fecha_devolucion_esperada` con ese cálculo.
+- **Si no pasa:** no hay caso de error; la regla siempre aplica.
 
-### RN3 — Bloqueo por préstamo vencido
+### RN3 — Bloqueado si tiene libros vencidos
 
-- **Trigger:** al recibir `POST /prestamos`.
-- **Condición:** el estudiante no debe tener ningún préstamo con `estado = "activo"` cuya `fecha_devolucion_esperada < ahora`.
-- **Acción si cumple:** continuar.
-- **Acción si no cumple:** `409 Conflict` con `{error: "tiene_prestamos_vencidos", prestamos_vencidos: [...]}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos`.
+- **Qué se valida:** el estudiante no debe tener préstamos activos cuya fecha esperada ya pasó.
+- **Si pasa:** sigue.
+- **Si no pasa:** `409 Conflict` con `{error: "tiene_prestamos_vencidos", prestamos_vencidos: [...]}`.
 
-### RN4 — Bloqueo por multas pendientes
+### RN4 — Bloqueado si tiene multas sin pagar
 
-- **Trigger:** al recibir `POST /prestamos`.
-- **Condición:** el estudiante no debe tener ninguna multa con `pagada = false`.
-- **Acción si cumple:** continuar.
-- **Acción si no cumple:** `409 Conflict` con `{error: "tiene_multas_pendientes", monto_total: N}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos`.
+- **Qué se valida:** el estudiante no debe tener ninguna multa con `pagada = false`.
+- **Si pasa:** sigue.
+- **Si no pasa:** `409 Conflict` con `{error: "tiene_multas_pendientes", monto_total: N}`.
 
-### RN5 — Ejemplar no puede prestarse dos veces simultáneamente
+### RN5 — Un ejemplar no se presta dos veces a la vez
 
-- **Trigger:** al recibir `POST /prestamos`.
-- **Condición:** el `ejemplar.estado` debe ser `"disponible"`.
-- **Acción si cumple:** marcar `ejemplar.estado = "prestado"` y crear el préstamo.
-- **Acción si no cumple:** `409 Conflict` con `{error: "ejemplar_no_disponible"}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos`.
+- **Qué se valida:** el ejemplar debe estar `"disponible"`.
+- **Si pasa:** se marca como `"prestado"` y se crea el préstamo.
+- **Si no pasa:** `409 Conflict` con `{error: "ejemplar_no_disponible"}`.
 
-### RN6 — Renovación bloqueada por lista de espera
+### RN6 — No se puede renovar si otro estudiante está esperando
 
-- **Trigger:** al recibir `POST /prestamos/:id/renovacion`.
-- **Condición:** el ejemplar asociado no debe tener `solicitado_por_otro = true`.
-- **Acción si cumple:** sumar 15 días (o 3 si alta demanda) a `fecha_devolucion_esperada`, incrementar `renovaciones`.
-- **Acción si no cumple:** `409 Conflict` con `{error: "no_renovable_lista_espera"}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos/:id/renovacion`.
+- **Qué se valida:** el ejemplar no debe tener `solicitado_por_otro = true`.
+- **Si pasa:** se suman 15 días (o 3 si es alta demanda) a la fecha esperada y se incrementa `renovaciones`.
+- **Si no pasa:** `409 Conflict` con `{error: "no_renovable_lista_espera"}`.
 
-### RN7 — Renovación solo sobre préstamo activo
+### RN7 — Solo se renuevan préstamos activos
 
-- **Trigger:** al recibir `POST /prestamos/:id/renovacion`.
-- **Condición:** `prestamo.estado` debe ser `"activo"`.
-- **Acción si no cumple:** `409 Conflict` con `{error: "prestamo_no_renovable_estado", estado_actual: ...}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos/:id/renovacion`.
+- **Qué se valida:** el préstamo debe estar en estado `"activo"`.
+- **Si no pasa:** `409 Conflict` con `{error: "prestamo_no_renovable_estado", estado_actual: ...}`.
 
-### RN8 — Cálculo de multa al devolver tarde
+### RN8 — Cálculo de la multa al devolver tarde
 
-- **Trigger:** al recibir `POST /prestamos/:id/devolucion`.
-- **Condición:** si `fecha_devolucion_real > fecha_devolucion_esperada`.
-- **Acción si cumple:**
-  - `dias_retraso = ceil((fecha_devolucion_real - fecha_devolucion_esperada) en días calendario)`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos/:id/devolucion`.
+- **Qué se valida:** si `fecha_devolucion_real > fecha_devolucion_esperada`.
+- **Si pasa:**
+  - `dias_retraso = redondear hacia arriba la diferencia en días calendario`.
   - `monto_cop = dias_retraso * 2000`.
-  - Crear `Multa` con `pagada = false` y vincularla al préstamo y al estudiante.
-- **Acción si no cumple:** no se genera multa.
+  - Se crea la multa con `pagada = false`.
+- **Si no pasa:** no se genera multa.
 
-### RN9 — Devolución solo sobre préstamo activo
+### RN9 — Solo se devuelve un préstamo activo
 
-- **Trigger:** al recibir `POST /prestamos/:id/devolucion`.
-- **Condición:** `prestamo.estado` debe ser `"activo"`.
-- **Acción si cumple:** marcar `estado = "devuelto"`, asignar `fecha_devolucion_real = ahora`, liberar ejemplar (`estado = "disponible"`, `solicitado_por_otro = false`).
-- **Acción si no cumple:** `409 Conflict` con `{error: "prestamo_ya_devuelto_o_invalido"}`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos/:id/devolucion`.
+- **Qué se valida:** el préstamo debe estar `"activo"`.
+- **Si pasa:** se marca como `"devuelto"`, se pone `fecha_devolucion_real = ahora` y se libera el ejemplar.
+- **Si no pasa:** `409 Conflict` con `{error: "prestamo_ya_devuelto_o_invalido"}`.
 
-### RN10 — Tipo de estudiante restringido a pregrado/posgrado
+### RN10 — Solo pregrado o posgrado
 
-- **Trigger:** al recibir `POST /estudiantes`.
-- **Condición:** `tipo ∈ {"pregrado", "posgrado"}`.
-- **Acción si no cumple:** `400 Bad Request` con `{error: "tipo_estudiante_no_soportado"}`.
+- **Cuándo se evalúa:** al hacer `POST /estudiantes`.
+- **Qué se valida:** `tipo` debe ser `"pregrado"` o `"posgrado"`.
+- **Si no pasa:** `400 Bad Request` con `{error: "tipo_estudiante_no_soportado"}`.
 
-### RN11 — Marca de solicitud sobre ejemplar (alimenta RN6)
+### RN11 — Marcar que alguien está esperando un ejemplar
 
-- **Trigger:** al recibir `POST /prestamos/:id/solicitud-espera`.
-- **Condición:** el `prestamo.estado` debe ser `"activo"` y el solicitante debe ser distinto al actual prestatario.
-- **Acción si cumple:** `ejemplar.solicitado_por_otro = true`.
-- **Acción si no cumple:** `409 Conflict`.
+- **Cuándo se evalúa:** al hacer `POST /prestamos/:id/solicitud-espera`.
+- **Qué se valida:** el préstamo debe estar `"activo"` y el solicitante debe ser distinto al que tiene el libro.
+- **Si pasa:** se prende `solicitado_por_otro = true` en el ejemplar.
+- **Si no pasa:** `409 Conflict`.
 
-### RN12 — Estado "vencido" derivado, no almacenado
+### RN12 — "Vencido" se calcula al vuelo, no se guarda
 
-- **Trigger:** al listar préstamos o consultar vencidos.
-- **Condición:** un préstamo con `estado = "activo"` y `fecha_devolucion_esperada < ahora` se reporta como vencido en respuestas, sin necesidad de mutar el registro hasta que se devuelva.
-- **Acción si cumple:** marcar la respuesta con `vencido: true`.
+- **Cuándo se evalúa:** cuando se listan préstamos o se consultan los vencidos.
+- **Qué se valida:** un préstamo está vencido si está `"activo"` y `fecha_devolucion_esperada < ahora`.
+- **Si pasa:** se devuelve con `vencido: true` en la respuesta, pero el campo `estado` no cambia.
 
 ---
 
-## 6. Decisiones tomadas (lo que el correo no dice)
+## 6. Decisiones que tomé (cosas que el correo no dice)
 
-### D1 — Días calendario para multa
+### D1 — Los días de retraso son días calendario
 
-- **Contexto:** el correo dice "2.000 pesos por día de retraso", pero no precisa si son días hábiles o calendario.
-- **Decisión:** días calendario, redondeados hacia arriba.
-- **Justificación:** interpretación más simple; alinea con la práctica común de bibliotecas universitarias en Colombia y evita depender de un calendario de festivos.
+- **El hueco:** el correo dice "2.000 pesos por día de retraso" pero no aclara si cuenta sábados, domingos y festivos.
+- **Lo que decidí:** días calendario, y si la diferencia da decimales redondeo hacia arriba.
+- **Por qué:** es lo más simple, no me obliga a mantener un calendario de festivos colombianos y es lo que hacen casi todas las bibliotecas.
 
-### D2 — Fechas en ISO 8601 UTC
+### D2 — Todas las fechas en ISO 8601 UTC
 
-- **Contexto:** el correo no define formato ni zona horaria.
-- **Decisión:** toda fecha en la API se serializa como `YYYY-MM-DDTHH:mm:ss.sssZ` (UTC).
-- **Justificación:** estándar industria, evita ambigüedad de zona horaria al consumirse desde móvil y portal.
+- **El hueco:** no se dice qué formato ni qué zona horaria usar.
+- **Lo que decidí:** `YYYY-MM-DDTHH:mm:ss.sssZ`, todo en UTC.
+- **Por qué:** es el estándar y evita líos cuando la app móvil esté en otra zona horaria.
 
-### D3 — "Lista de espera" modelada como bandera booleana
+### D3 — La "lista de espera" es solo una bandera
 
-- **Contexto:** el correo dice "si otro estudiante lo está esperando, no se renueva", pero no pide una cola formal con FIFO ni notificaciones.
-- **Decisión:** el ejemplar tiene `solicitado_por_otro: boolean`, encendida por el endpoint `POST /prestamos/:id/solicitud-espera` y apagada al devolver.
-- **Justificación:** cubre la regla solicitada (bloquea renovación) sin sobreingeniería. Una cola FIFO con prioridades excede el alcance de esta versión.
+- **El hueco:** el correo dice que no se puede renovar si alguien más está esperando, pero no pide una cola con prioridades ni notificaciones.
+- **Lo que decidí:** el ejemplar tiene `solicitado_por_otro: boolean`. Se prende con `POST /prestamos/:id/solicitud-espera` y se apaga al devolver.
+- **Por qué:** cubre la regla sin meterme en una cola FIFO que excede el alcance.
 
-### D4 — Estado "vencido" es derivado, no almacenado
+### D4 — "Vencido" no se guarda, se calcula
 
-- **Contexto:** el correo pide "avisar sobre préstamos vencidos" sin precisar si "vencido" es un estado persistido o calculado al vuelo.
-- **Decisión:** se mantiene `estado` con valores `activo / devuelto`. El vencimiento se computa comparando `fecha_devolucion_esperada` contra `ahora` al momento de la consulta.
-- **Justificación:** evita un job de cron para mutar estados; con datos en memoria un cron añade complejidad innecesaria.
+- **El hueco:** no queda claro si "vencido" es un estado persistido o algo que se calcula al consultar.
+- **Lo que decidí:** el campo `estado` solo tiene `"activo"` o `"devuelto"`. Vencido se calcula al vuelo.
+- **Por qué:** con datos en memoria un cron job para mutar estados es más lío que beneficio.
 
-### D5 — Sin endpoint para pagar multa en esta versión
+### D5 — En esta versión no hay endpoint para pagar multas
 
-- **Contexto:** el correo menciona que se cobra y que mientras esté pendiente bloquea préstamos, pero no detalla cómo se registra el pago.
-- **Decisión:** las multas se crean con `pagada = false` y no hay endpoint para marcarlas como pagadas en V1. Se asume gestión presencial.
-- **Justificación:** mantiene el alcance del MVP y respeta la restricción "por ahora con esto está bien".
+- **El hueco:** el correo no explica cómo se registra el pago de una multa.
+- **Lo que decidí:** las multas se quedan en `pagada = false`. No hay endpoint para marcarlas como pagadas.
+- **Por qué:** el alcance dice "por ahora con esto está bien" y el cobro físico es presencial.
 
-### D6 — Catálogo y estudiantes se cargan vía POST (no se asume seed)
+### D6 — El catálogo y los estudiantes se cargan vía POST
 
-- **Contexto:** el correo dice "tenemos varios miles de libros catalogados" pero el sistema arranca en memoria sin datos.
-- **Decisión:** exponer `POST /libros`, `POST /libros/:id/ejemplares` y `POST /estudiantes` para que la biblioteca pueda poblar el sistema.
-- **Justificación:** sin estos endpoints el sistema no podría usarse; un seed estático sería frágil.
+- **El hueco:** dicen que ya tienen miles de libros pero el sistema arranca vacío en memoria.
+- **Lo que decidí:** exponer `POST /libros`, `POST /libros/:id/ejemplares` y `POST /estudiantes`.
+- **Por qué:** sin estos endpoints el sistema no se puede usar. Un seed fijo en código quedaría feo y poco flexible.
 
-### D7 — Códigos HTTP unificados para errores de regla de negocio
+### D7 — Códigos HTTP estándar para los errores
 
-- **Contexto:** el correo no especifica códigos HTTP.
-- **Decisión:** `400` para validación de payload, `404` para recurso inexistente, `409` para violación de regla de negocio.
-- **Justificación:** convención REST estándar; `409 Conflict` comunica "tu petición es válida sintácticamente pero choca con el estado del sistema".
+- **El hueco:** el correo no menciona códigos HTTP.
+- **Lo que decidí:** `400` si el body está mal, `404` si no existe el recurso, `409` si choca con una regla de negocio.
+- **Por qué:** es la convención REST y `409` comunica bien la idea de "lo pediste bien pero el sistema no te deja".
 
 ---
 
@@ -269,31 +271,31 @@ Estudiante 1 --- N Multa
 
 | Código | Significado            | Cuándo se usa                                                                |
 |--------|------------------------|------------------------------------------------------------------------------|
-| 200    | OK                     | GET exitosos; devoluciones y renovaciones exitosas.                          |
-| 201    | Created                | POST que crea recurso (libro, ejemplar, estudiante, préstamo).               |
-| 400    | Bad Request            | Body malformado, campo obligatorio faltante, tipo inválido.                  |
-| 404    | Not Found              | Estudiante, libro, ejemplar o préstamo inexistente.                          |
-| 409    | Conflict               | Reglas de negocio violadas (límites, vencidos, multas, lista de espera, ejemplar ya prestado, estado inválido). |
-| 500    | Internal Server Error  | Excepción no controlada del servidor.                                        |
+| 200    | OK                     | GETs, devoluciones y renovaciones que salen bien.                            |
+| 201    | Created                | POST que crea algo (libro, ejemplar, estudiante, préstamo).                  |
+| 400    | Bad Request            | Body mal armado, campo obligatorio faltando, tipo de dato incorrecto.        |
+| 404    | Not Found              | El estudiante, libro, ejemplar o préstamo no existe.                         |
+| 409    | Conflict               | Una regla de negocio bloquea la operación (cupo, vencidos, multas, etc.).    |
+| 500    | Internal Server Error  | Algo se cayó en el servidor.                                                 |
 
 ---
 
 ## 8. Restricciones técnicas
 
-- **Stack:** Node.js + Express (JavaScript, sin TypeScript).
-- **Persistencia:** datos en memoria (objetos y arrays en módulo del servidor). Sin base de datos.
+- **Stack:** Node.js + Express + **TypeScript**.
+- **Persistencia:** datos en memoria (objetos y arrays). Sin base de datos.
 - **Sin autenticación** en esta versión.
-- **Sin frontend** en esta versión. Solo API REST con JSON.
-- **Sin notificaciones externas** (correo, push). El cliente consume `GET /prestamos/vencidos` cuando lo necesite.
+- **Sin frontend.** Solo API REST con JSON.
+- **Sin notificaciones externas** (correo, push). Si quieren ver vencidos, consultan `GET /prestamos/vencidos`.
 
 ---
 
-## 9. Preguntas pendientes para la cliente
+## 9. Preguntas que le haría a la cliente
 
-1. **Multa y días hábiles:** ¿la multa por día se cobra incluyendo sábados, domingos y festivos, o solo días hábiles? (asumido: días calendario — ver D1).
-2. **Pago de multas:** ¿cómo se registra el pago de una multa? ¿lo hace un funcionario en mostrador o hay un proceso aparte? (asumido: fuera del alcance V1 — ver D5).
-3. **Lista de espera:** si dos estudiantes "solicitan" el mismo ejemplar prestado, ¿hay prioridad (FIFO) o basta con marcar que hay espera? (asumido: bandera booleana sin orden — ver D3).
-4. **Renovación múltiple:** ¿un préstamo puede renovarse infinitas veces mientras no haya lista de espera, o hay un tope de renovaciones?
-5. **Cambio de tipo de estudiante:** cuando un estudiante de pregrado pasa a posgrado, ¿su límite cambia automáticamente o requiere un proceso manual?
-6. **Disponibilidad parcial:** si un libro tiene 5 ejemplares y 3 están prestados, ¿en el catálogo se muestra como "disponible", "parcialmente disponible" o se devuelve el conteo? (asumido: conteo numérico de ejemplares disponibles).
-7. **Reset de morosidad:** ¿el bloqueo por vencidos se levanta apenas devuelve, o el estudiante queda marcado por un período?
+1. **Multas y días hábiles:** los 2.000 por día, ¿cuentan sábados, domingos y festivos o solo días hábiles? (asumí calendario, ver D1).
+2. **Pago de multas:** ¿quién y cómo registra que ya pagaron? ¿Lo hace alguien en mostrador? (lo dejé fuera del alcance, ver D5).
+3. **Lista de espera:** si dos estudiantes piden el mismo ejemplar, ¿hay un orden FIFO o basta con saber que hay alguien esperando? (asumí lo segundo, ver D3).
+4. **Renovaciones infinitas:** ¿puedo renovar el mismo libro 10 veces si nadie más lo pide, o hay un tope?
+5. **Cambio de tipo de estudiante:** si un estudiante pasa de pregrado a posgrado, ¿el cupo cambia solo o hay que hacerlo a mano?
+6. **Catálogo y disponibilidad:** si un libro tiene 5 ejemplares y 3 están prestados, ¿cómo lo muestro? ¿"disponible", "parcialmente disponible" o el conteo? (estoy devolviendo el conteo).
+7. **Reset de morosidad:** cuando devuelven un libro vencido, ¿el bloqueo se quita inmediato o queda con marca por un rato?
