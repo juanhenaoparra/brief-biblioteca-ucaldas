@@ -10,10 +10,11 @@
 
 ---
 
-### Prompt enviado (literal)
+### Prompt enviado
 
 ```
-empecemos creando una rama para hacer la v1 del proyecto, nombra la rama usando feat/...
+Crea una rama nueva desde `main` para empezar la v1, usando la convención
+`feat/` en el nombre. No toques código todavía.
 ```
 
 ---

@@ -10,12 +10,13 @@
 
 ---
 
-### Prompt enviado (literal)
+### Prompt enviado
 
 ```
-si enfocate en el scaffolding del proyecto, enfocate en crear la estructura principal y en hacer setup de los paquetes para testing
-
-hazlo dentro de la carpeta proyecto en la raiz
+Arma el scaffolding del proyecto dentro de `proyecto/`: estructura por capas
+(domain, repositories, services, controllers, routes, middlewares, utils),
+Express con TypeScript en modo estricto, y el entorno de testing con Jest y
+Supertest configurado. Deja un endpoint y un test de health funcionando.
 ```
 
 ---
