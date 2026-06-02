@@ -10,12 +10,13 @@
 
 ---
 
-### Prompt enviado (literal)
+### Prompt enviado
 
 ```
-avanza, no me pidas permiso para seguir avanzando.
-
-tambien auydame probando tus cambios
+Avanza de forma autónoma con el resto de la implementación: los services con
+las 12 reglas de negocio (RN1–RN12), los controllers y las rutas de los 14
+endpoints. Acompáñalo con tests en formato AAA —un caso por regla— más
+integración HTTP, y déjalos corriendo en verde.
 ```
 
 ---

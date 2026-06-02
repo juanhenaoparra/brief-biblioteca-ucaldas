@@ -10,10 +10,13 @@
 
 ---
 
-### Prompt enviado (literal)
+### Prompt enviado
 
 ```
-si vamos adelante
+Implementa la capa de repositorios in-memory: un store genérico sobre Map y un
+repositorio por entidad con sus consultas de negocio (activos por estudiante,
+multas pendientes, disponibles por libro). Expón instancias singleton y una
+función para resetear el estado en los tests.
 ```
 
 ---

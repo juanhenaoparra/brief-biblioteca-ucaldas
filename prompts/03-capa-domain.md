@@ -10,13 +10,14 @@
 
 ---
 
-### Prompt enviado (literal)
+### Prompt enviado
 
 ```
-crea una rama para esto
+Crea una rama `feat/` para la etapa 2 y empieza por la capa de dominio: define
+las interfaces de las cinco entidades (Libro, Ejemplar, Estudiante, Préstamo y
+Multa) calcadas de la especificación, y centraliza las constantes de negocio
+(plazos, cupos y tarifa de multa) para no dejar números mágicos.
 ```
-
-(seguido de `si` para confirmar arrancar con la capa de domain)
 
 ---
 
