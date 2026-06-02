@@ -210,3 +210,64 @@ Sí, pero no de tests sino de **registro**: a mitad de la sesión decidí cambia
 **¿Hubo algún momento en que la IA "dijo que terminó" pero al verificar tú descubriste que no?**
 
 En la implementación grande (prompt #05) la IA afirmó dejar todo "en verde", pero la primera corrida real mostró que un suite completo **no compilaba** por un import sin usar (H9/B1). El "terminé" era cierto a nivel de lógica pero falso a nivel de "los tests corren". Confirma que hay que ejecutar siempre, no creerle al resumen. La IA lo corrigió en el mismo paso al correr `npm test`, pero el episodio dejó claro que el "está funcionando" necesita evidencia de ejecución, no la palabra del modelo.
+
+---
+
+## Chatbot Ollama — Registro
+
+> Taller `02-tu-trabajo/taller-ollama-chatbot.md`: usar un modelo local (Ollama)
+> como asistente para generar y ejecutar pruebas contra la API, sin costos de API
+> en la nube y manteniendo el código privado.
+
+### Modelo usado
+
+- **Nombre:** `qwen2.5-coder:7b`
+- **RAM consumida aproximada:** 8–16 GB
+
+### Preguntas útiles que generó el chatbot
+
+| Pregunta que hice | Qué generó el chatbot | ¿Fue útil? |
+|---|---|---|
+| "genera la prueba RN1 completa: crear los 3 préstamos válidos para pregrado y luego intentar el cuarto" | Un plan paso a paso (crear estudiante → crear 3 libros con ejemplares → 3 préstamos `201` → 4º préstamo esperando `409`), cada paso con su `curl` y una explicación, más un bloque "EJECUTAR" con la secuencia completa. | **Parcial.** La *estructura* del plan y la identificación de RN1 fueron correctas y útiles como guion; pero el **contrato de la API que usó estaba inventado** y no coincide con nuestra implementación (ver limitaciones), así que ningún `curl` habría funcionado tal cual. |
+
+### Limitaciones observadas
+
+**¿El chatbot inventó endpoints / contrato que no existen?** Sí, y fue el problema central:
+
+- **Prefijo y puerto equivocados:** usó `http://localhost:3001/api/...`. Nuestra API corre en el puerto **3010** y **no tiene prefijo `/api`**: las rutas son `/estudiantes`, `/libros`, `/prestamos` directamente.
+- **IDs numéricos autoincrementales inventados:** asumió `libros/1`, `estudianteId: 1`, `ejemplarId: 1`. En nuestro modelo los libros usan **UUID**, los estudiantes su **`codigo`** (string) y los ejemplares su **`codigo_inventario`** (string). No hay enteros 1, 2, 3.
+- **Campos del body incorrectos / faltantes:**
+  - `POST /estudiantes` con `{nombre, tipo}` → faltan los obligatorios `codigo`, `programa`, `semestre` → daría `400 datos_invalidos`.
+  - `POST /libros` con `{titulo, tipo: "normal"}` → inventó el campo `tipo`; nuestro contrato usa `alta_demanda` (boolean) y exige además `autor` y `sala` → `400`.
+  - `POST /libros/:id/ejemplares` con body vacío → falta `codigo_inventario` → `400`.
+  - `POST /prestamos` con `{estudianteId, ejemplarId}` numéricos → nuestro contrato es `{estudiante_codigo, ejemplar_codigo}` (strings).
+
+**¿Confundió reglas / tuvo incoherencias internas?** Sí:
+
+- **Test que no probaría lo que dice:** crea solo 3 ejemplares (libros 1–3) y luego intenta el 4º préstamo con `ejemplarId: 4`, que **no existe**. Eso daría `404 ejemplar_no_encontrado` *antes* de llegar a evaluar RN1, así que el `409` esperado **nunca se alcanzaría**. Para probar RN1 de verdad hace falta un 4º ejemplar disponible.
+- **Contradicción en su propia explicación:** el texto dice "creamos tres libros, uno de alta demanda y dos normales", pero los tres `curl` mandan `"tipo": "normal"`. Ninguno es de alta demanda.
+
+**¿Tuvo que corregirle algo / glitches del modelo?** Sí, salida corrupta típica de un modelo local:
+
+- JSON truncado: `-d 'o": "Libro B", "tipo": "normal"}'` (le faltó el inicio `{"titulo": "Libro B"...`).
+- Comando roto: `curl -X POSlhost:3001/...` (debía ser `POST http://localhost:3001/...`).
+- Palabras cortadas: "solicita el segstamo", "el segstamo".
+
+Lo único que el chatbot acertó de fondo fue la **definición conceptual de RN1** (pregrado ≤ 3 préstamos activos, si no `409`). El fallo no fue entender la regla, sino **mapearla a nuestra API real**: usó un contrato REST genérico porque el *system prompt* no estaba ajustado a nuestra implementación (justo el requisito clave del taller: guardar el system prompt adaptado en `prompts/07-system-prompt-chatbot.md`).
+
+### Comparación: chatbot local vs. ChatGPT/Claude en la nube
+
+**Diferencias en calidad:**
+
+- El modelo local (`qwen2.5-coder:7b`) produjo salida con **JSON malformado, comandos corruptos y palabras truncadas**, errores que rara vez aparecen en los modelos grandes de la nube.
+- **Alucinó el contrato completo de la API** (prefijo `/api`, IDs numéricos, campos `tipo`) en vez de pedir o respetar el esquema real. Un modelo de la nube con el mismo system prompt suele anclarse mejor a las restricciones dadas.
+- No detectó el **error lógico** de su propio test (probar RN1 con un ejemplar inexistente), algo que un modelo más capaz tiende a notar.
+
+**Ventajas de correrlo localmente:**
+
+- **Costo cero por token:** se puede iterar sobre los prompts de prueba sin gastar en API de nube.
+- **Privacidad:** el código y la especificación de la API **no salen de la máquina**, relevante para una entidad como la biblioteca.
+- **Sin dependencia de red ni de límites de tasa:** funciona offline.
+- A cambio, **paga en RAM** (8–16 GB ocupados) y en **calidad/fiabilidad de la salida**, que exige más revisión humana.
+
+**Conclusión:** para este caso, el chatbot local sirve como **generador de borradores de guion de pruebas** (la estructura paso a paso es un buen punto de partida), pero **no como fuente de comandos ejecutables**: hay que corregirle el contrato contra la especificación real antes de correr nada. Refuerza el aprendizaje de la auditoría: el modelo —local o no— produce algo *plausible* que igual hay que validar contra la realidad de la API.
