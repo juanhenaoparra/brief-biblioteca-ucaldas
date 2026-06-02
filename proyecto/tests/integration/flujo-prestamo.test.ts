@@ -101,4 +101,16 @@ describe("Códigos HTTP de error (D7)", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("query_invalida");
   });
+
+  it("400 json_invalido cuando el body no es JSON válido (no 500)", async () => {
+    // Act: body con JSON malformado
+    const res = await request(app)
+      .post("/prestamos")
+      .set("Content-Type", "application/json")
+      .send('{"estudiante_codigo": ');
+
+    // Assert: lo maneja como error del cliente, no del servidor
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("json_invalido");
+  });
 });

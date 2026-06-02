@@ -271,3 +271,32 @@ Lo único que el chatbot acertó de fondo fue la **definición conceptual de RN1
 - A cambio, **paga en RAM** (8–16 GB ocupados) y en **calidad/fiabilidad de la salida**, que exige más revisión humana.
 
 **Conclusión:** para este caso, el chatbot local sirve como **generador de borradores de guion de pruebas** (la estructura paso a paso es un buen punto de partida), pero **no como fuente de comandos ejecutables**: hay que corregirle el contrato contra la especificación real antes de correr nada. Refuerza el aprendizaje de la auditoría: el modelo —local o no— produce algo *plausible* que igual hay que validar contra la realidad de la API.
+
+### Validación de las sesiones guiadas del taller (ejecución real contra la API en :3010)
+
+Tras **corregir el system prompt** (ver `prompts/08-system-prompt-chatbot.md`), reejecuté el flujo y validé las 5 sesiones guiadas del taller, levantando la API real (`node dist/index.js` en `:3010`) y ejecutando los `curl`.
+
+**1) El prompt corregido arregló las alucinaciones del modelo.** Con el mismo prompt de RN1 que antes daba un contrato inventado, qwen ahora genera el contrato correcto: puerto `3010`, sin `/api`, campos `estudiante_codigo`/`ejemplar_codigo`/`codigo_inventario`/`alta_demanda`, códigos string y reconoce que `libro_id` es un UUID. En la Sesión 5 (debugging) identificó correctamente **RN1** como la regla violada; en la Sesión 4 generó tres casos de entrada inválida con sus códigos (`400`, `404`, `404`) acertados.
+
+**2) Resultado de las sesiones contra la API real (18/18 OK tras el fix):**
+
+| Sesión | Qué validé | Resultado real |
+|---|---|---|
+| 1 — Datos base | crear pregrado, posgrado, libro normal +8 ejemplares, alta demanda +1 | `201` en todos |
+| 2 — Cupos | pregrado 3 OK + 4º bloqueado; posgrado 5 OK + 6º bloqueado | `409 limite_prestamos_alcanzado {limite, actuales}` correcto en ambos |
+| 3 — Disponibilidad y plazos | ejemplar ya prestado; plazo normal vs alta demanda | `409 ejemplar_no_disponible`; plazo **15.00** y **3.00** días |
+| 4 — Validación | campos vacíos, estudiante/ejemplar inexistente, JSON malformado | `400 datos_invalidos`, `404` x2, `400 json_invalido` |
+| 5 — Debugging | preguntar al chatbot por un 201 indebido | identificó RN1 y sugirió revisar la lógica de cupo |
+
+**3) Bug REAL encontrado gracias a esta sesión: JSON malformado devolvía `500` en vez de `400`.**
+
+- **Cómo apareció:** mi propio script de pruebas tenía un error de *escaping* de comillas en bash y enviaba JSON truncado (sin llaves). En vez de un `400`, la API respondía `500 error_interno`.
+- **Causa raíz (del código, no del script):** `body-parser` lanza un error con `type: "entity.parse.failed"` y `statusCode: 400`, pero el `errorHandler` solo reconocía instancias de `HttpError`; cualquier otra cosa caía al `500` genérico. Además, **se tragaba el error sin loguearlo**, lo que dificultó el diagnóstico.
+- **Corrección aplicada (B3):** el `errorHandler` ahora detecta `entity.parse.failed` y responde `400 {error:"json_invalido"}`, y registra con `console.error` los errores no controlados antes de devolver `500`. Se agregó un test de integración (`400 json_invalido ... (no 500)`). Suite: **37/37 en verde**.
+
+**4) Dos errores de método MÍOS (de QA), no del código, que vale la pena registrar:**
+
+- **Dos servidores en el mismo puerto:** maté un proceso con `kill -9` mientras `tsx watch` seguía vivo y respawneó otro; dos instancias peleando por `:3010` produjeron `500` intermitentes y estado inconsistente que al principio confundí con un bug. Lección: asegurar **una sola instancia** y un estado limpio antes de concluir nada.
+- **Reproducción poco fiable:** el `500` "desaparecía" al reintentar el request aislado (porque ahí sí mandaba JSON bien formado). Una reproducción confiable —y loguear el stack en el servidor— fue lo que separó el artefacto del entorno del bug real. Sin eso, habría reportado un bug fantasma o ignorado uno verdadero.
+
+**Limitación del modelo que persiste aun con el prompt corregido:** en la prueba de RN1, qwen seguía construyendo mal el caso (reusaba el ejemplar `E1` para el 4º préstamo, lo que dispara RN5 y no RN1) y lo justificaba citando RN5; y repetía que los datos están "en la base de datos" cuando son en memoria. El contrato quedó bien, pero el **razonamiento del caso de prueba** todavía requiere supervisión humana.

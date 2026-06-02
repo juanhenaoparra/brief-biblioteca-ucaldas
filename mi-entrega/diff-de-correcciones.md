@@ -111,6 +111,30 @@ expect(multa?.monto_cop).toBe((multa?.dias_retraso ?? 0) * TARIFA_MULTA_DIA_COP)
 El cálculo exacto del redondeo se cubre aparte con fechas fijas en
 `fechas.test.ts`.
 
+### IA5 — JSON malformado devolvía 500 en vez de 400 (B3)
+
+- **Archivo:** `proyecto/src/middlewares/error-handler.ts`
+- **Qué pasó:** al probar la API con el chatbot de Ollama (taller), un body con JSON
+  inválido provocaba `500 error_interno`. `body-parser` lanza un error
+  `entity.parse.failed` (statusCode 400) que el handler no reconocía como `HttpError`.
+- **Cómo se detectó:** ejecución real de las sesiones guiadas contra la API viva
+  (ver `bitacora.md`, "Validación de las sesiones guiadas").
+- **Corrección (IA):** manejar el caso como `400 json_invalido` y loguear los
+  errores no controlados antes del `500`. Con test de integración.
+
+```diff
+   if (err instanceof HttpError) {
+     res.status(err.status).json({ error: err.code, ...err.details });
+     return;
+   }
++  if (err instanceof Error && (err as { type?: string }).type === "entity.parse.failed") {
++    res.status(400).json({ error: "json_invalido" });
++    return;
++  }
++  console.error("[error_interno]", err);
+   res.status(500).json({ error: "error_interno" });
+```
+
 ---
 
 ## 3. Conclusión

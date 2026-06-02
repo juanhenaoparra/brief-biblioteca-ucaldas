@@ -144,4 +144,10 @@ async function iniciar() {
   preguntar();
 }
 
-iniciar();
+// Solo arranca el modo interactivo si se ejecuta directamente (node chatbot.js).
+// Al requerirlo como módulo se expone el prompt y las funciones para pruebas.
+if (require.main === module) {
+  iniciar();
+}
+
+module.exports = { SYSTEM_PROMPT, BASE_URL, MODELO, preguntarAlModelo, ejecutarCurl };
