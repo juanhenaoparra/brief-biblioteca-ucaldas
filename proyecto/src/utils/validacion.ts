@@ -28,8 +28,9 @@ export function exigirString(body: Record<string, unknown>, campo: string): stri
   const valor = body[campo];
   if (valor === undefined || valor === null) invalido(campo, "es requerido");
   if (typeof valor !== "string") invalido(campo, "debe ser un string");
-  if (valor.trim() === "") invalido(campo, "no puede estar vacío");
-  return valor;
+  const limpio = valor.trim();
+  if (limpio === "") invalido(campo, "no puede estar vacío");
+  return limpio;
 }
 
 /** Exige un boolean. */
